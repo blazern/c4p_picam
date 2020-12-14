@@ -9,7 +9,7 @@ import threading
 import yaml
 import json
 
-from flask import Flask, url_for
+from flask import Flask, url_for, Response
 from markupsafe import escape
 
 
@@ -104,10 +104,15 @@ def stop_video_preview():
 
 
 def result_to_json(result):
-    return json.dumps({ 'result': result })
+    return create_response_for(json.dumps({ 'result': result }))
 
 def error_to_json(error):
-    return json.dumps({ 'error': error })
+    return create_response_for(json.dumps({ 'error': error }))
+
+def create_response_for(string):
+    resp = Response(string)
+    resp.headers['Access-Control-Allow-Origin'] = '*'
+    return resp
 
 def main():
     logging.getLogger().setLevel(logging.INFO)
