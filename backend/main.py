@@ -1,7 +1,10 @@
+from datetime import datetime
 from enum import Enum
 import argparse
 import logging
 import os
+import psutil
+import shutil
 import signal
 import subprocess
 import sys
@@ -9,6 +12,13 @@ import time
 import threading
 import yaml
 import json
+
+try:
+    import picamera
+except ModuleNotFoundError:
+    print('!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!')
+    print('!!! CANNOT IMPORT picamera - ALL WORK WITH CAMERA WILL FAIL !!!')
+    print('!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!')
 
 from flask import Flask, url_for, Response
 from markupsafe import escape
@@ -22,11 +32,13 @@ class VideoState:
 class State:
     video_state = VideoState.IDLE
     stopping_video_preview = False
+    stopping_video_recording = False
 
 class Config:
     video_preview_url = None
     video_preview_cmd = None
 
+MIN_SYSTEM_FREE_SPACE = 100 * 1024 * 1024 # 100 megabytes
 STATE = State()
 CONFIG = Config()
 app = Flask(__name__)
@@ -94,6 +106,85 @@ def stop_video_preview():
             logging.info('Waiting for video preview stop...')
             time.sleep(1)
     return result_to_json('ok')
+
+@app.route('/free_space_bytes')
+def free_space_bytes():
+    return result_to_json(system_free_space())
+
+@app.route('/recorded_videos_size_bytes')
+def recorded_videos_size_bytes():
+    return result_to_json(get_size_of(recorded_videos_folder()))
+
+@app.route('/delete_recorded_videos')
+def delete_recorded_videos():
+    if STATE.video_state == VideoState.RECORDING:
+        return error_to_json('cannot remove recorded videos during recording')
+    path = recorded_videos_folder()
+    if os.path.exists(path) and os.path.isdir(path):
+        shutil.rmtree(path)
+    return result_to_json('ok')
+
+# TODO: this function needs to be as robust as it's possible -
+#       if recording fails, it needs to be restarted automatically.
+@app.route('/start_video_recording')
+def start_video_recording():
+    def is_enough_free_space():
+        return MIN_SYSTEM_FREE_SPACE < system_free_space()
+
+    if STATE.video_state == VideoState.PREVIEW:
+        return error_to_json('cannot record while previewing in progress')
+    elif STATE.video_state == VideoState.RECORDING:
+        return result_to_json('ok')
+    elif not is_enough_free_space():
+        return error_to_json('not enough of free space')
+
+    def now_str():
+        return datetime.now().strftime("%Y_%m_%d__%H_%M_%S")
+
+    def thread_function():
+        logging.info('Starting video recording')
+        with picamera.PiCamera() as camera:
+            STATE.video_state = VideoState.RECORDING
+            # camera.resolution = (640, 480)
+            last_video_name = os.path.join(
+                recorded_videos_folder(),
+                '{}.h264'.format(now_str()))
+            logging.info('Starting recording of {}'.format(last_video_name))
+            camera.start_recording(last_video_name)
+            last_recoring_start_time = datetime.now()
+
+            while is_enough_free_space() and not STATE.stopping_video_recording:
+                camera.wait_recording(1)
+                passed_time = (datetime.now() - last_recoring_start_time).total_seconds()
+                if CONFIG.recorded_videos_length_seconds < passed_time:
+                    new_video_name = os.path.join(
+                        recorded_videos_folder(),
+                        '{}.h264'.format(now_str()))
+                    logging.info('Stopping recording of {}, starting recording of {}'
+                        .format(last_video_name, new_video_name))
+                    camera.split_recording(new_video_name)
+                    last_recoring_start_time = datetime.now()
+            camera.stop_recording()
+        STATE.stopping_video_recording = False
+        STATE.video_state = VideoState.IDLE
+        logging.info('Video recording stopped')
+
+    thread = threading.Thread(target=thread_function)
+    thread.start()
+
+    while not STATE.video_state == VideoState.RECORDING:
+        logging.info('Waiting for video recording start...')
+        time.sleep(1)
+    return result_to_json('ok')
+
+@app.route('/stop_video_recording')
+def stop_video_recording():
+    if STATE.video_state == VideoState.RECORDING:
+        STATE.stopping_video_recording = True
+        while STATE.video_state == VideoState.RECORDING:
+            logging.info('Waiting for video recording stop...')
+            time.sleep(1)
+    return result_to_json('ok')
 ####################################################################
 ################################HTTP################################
 ####################################################################
@@ -109,6 +200,24 @@ def create_response_for(string):
     resp = Response(string)
     resp.headers['Access-Control-Allow-Origin'] = '*'
     return resp
+
+def get_size_of(path):
+    total_size = 0
+    for dirpath, dirnames, filenames in os.walk(path):
+        for f in filenames:
+            fp = os.path.join(dirpath, f)
+            # skip if it is symbolic link
+            if not os.path.islink(fp):
+                total_size += os.path.getsize(fp)
+    return total_size
+
+def system_free_space():
+    return psutil.disk_usage('/').free
+
+def recorded_videos_folder():
+    path = CONFIG.recorded_videos_folder
+    os.makedirs(path, exist_ok=True)
+    return path
 
 def main(argv):
     logging.getLogger().setLevel(logging.INFO)
@@ -128,10 +237,14 @@ def main(argv):
     parser.add_argument('--video-preview-url', required=True,
                         help='Video preview URL which will be put into an <iframe> on frontend. '
                         + 'For manual testing you can use any URL.')
+    parser.add_argument('--recorded-videos-folder', required=True)
+    parser.add_argument('--recorded-videos-length-seconds', type=int, default=300)
     options = parser.parse_args()
 
     CONFIG.video_preview_url = options.video_preview_url
     CONFIG.video_preview_cmd = options.video_preview_cmd
+    CONFIG.recorded_videos_folder = options.recorded_videos_folder
+    CONFIG.recorded_videos_length_seconds = options.recorded_videos_length_seconds
 
     # Single process and single thread so that it would be easier to handle requests.
     # And also because there's expected to be no more than a couple of clients (preferrably 1).
