@@ -1,2 +1,0 @@
-video_preview_cmd: 'while true; do date; sleep 2; done > /tmp/aaatata4'
-video_preview_url: localhost:8888/some_preview
