@@ -14,6 +14,7 @@ class App extends React.Component {
       backendUrl: config.backendUrl
     }
     this.previewButtonClicked = this.previewButtonClicked.bind(this);
+    this.recordVideoButtonClicked = this.recordVideoButtonClicked.bind(this);
     this.onBackendUrlChange = this.onBackendUrlChange.bind(this);
     this.cookies = new Cookies();
   }
@@ -30,7 +31,7 @@ class App extends React.Component {
   }
 
   async setInitialState() {
-    await this.updateVideoState();
+    await this.updateKnownBackendState();
     await this.updatePreviewUrl();
   }
 
@@ -39,16 +40,31 @@ class App extends React.Component {
     if (this.state.videoState) {
       videoState = this.state.videoState;
     }
+    let freeSpaceMegabytes = 0;
+    if (this.state.freeSpaceBytes) {
+      freeSpaceMegabytes = Number((this.state.freeSpaceBytes / 1024 / 1024).toFixed(0))
+    }
 
     let previewButtonMessage;
     let previewIframe;
     if (this.state.showPreviewIframe) {
       previewButtonMessage = "Hide Video Preview";
-      previewIframe = <div><iframe src={this.state.previewUrl} width={800} height={600}/></div>
+      previewIframe = <div><iframe src={this.state.previewUrl} width={800} height={600} title="Video Preview"/></div>
     } else {
       previewButtonMessage = "Show Video Preview";
       previewIframe = "";
     }
+
+    let recordButtonMessage;
+    if (this.state.videoState === "recording") {
+      recordButtonMessage = "Stop Video Recording";
+    } else {
+      recordButtonMessage = "Start Video Recording";
+    }
+
+    const enablePreview = this.state.videoState !== undefined
+                          && this.state.videoState !== "recording";
+    const enableRecording = this.state.videoState !== undefined;
 
     return (
       <div className="App">
@@ -59,8 +75,11 @@ class App extends React.Component {
             <input type="text" value={this.state.backendUrl} onChange={this.onBackendUrlChange} />
           </label>
         </form>
-        <p> Video state: {videoState} </p>
-        <p> <button disabled={!this.state.previewUrl} onClick={this.previewButtonClicked}> {previewButtonMessage}</button> </p>
+        <p> Video state: {videoState}, free space: {freeSpaceMegabytes}mb </p>
+        <p>
+          <button disabled={!enablePreview} onClick={this.previewButtonClicked}> {previewButtonMessage}</button>
+          <button disabled={!enableRecording} onClick={this.recordVideoButtonClicked}> {recordButtonMessage}</button>
+        </p>
         <p> {previewIframe} </p>
       </header>
     </div>
@@ -69,18 +88,20 @@ class App extends React.Component {
 
   async onBackendUrlChange(event) {
     this.cookies.set('backendUrl', event.target.value);
-    await this.awaitableSetState({backendUrl: event.target.value});
+    await this.awaitableSetState({ backendUrl: event.target.value });
     await this.setInitialState();
   }
 
-  async updateVideoState() {
+  async updateKnownBackendState() {
     try {
-      const response = await axios.get(`${this.state.backendUrl}/video_state`);
-      const videoState = response.data.result;
-      this.setState({ videoState: videoState });
+      const response1 = await axios.get(`${this.state.backendUrl}/video_state`);
+      const videoState = response1.data.result;
+      const response2 = await axios.get(`${this.state.backendUrl}/free_space_bytes`);
+      const freeSpaceBytes = response2.data.result;
+      this.setState({ videoState: videoState, freeSpaceBytes: freeSpaceBytes });
     } catch (err) {
       console.log(`Caught error: ${err}`);
-      this.setState({ videoState: undefined });
+      this.setState({ videoState: undefined, freeSpaceBytes: 0 });
     }
   }
 
@@ -96,10 +117,10 @@ class App extends React.Component {
   }
 
   async previewButtonClicked() {
-    if (this.state.showPreviewIframe) {
-      await this.hidePreview();
-    } else {
+    if (this.state.videoState !== 'previewing') {
       await this.showPreview();
+    } else {
+      await this.hidePreview();
     }
   }
 
@@ -112,7 +133,7 @@ class App extends React.Component {
       const result = response.data.result;
       if (result === "ok") {
         await this.awaitableSetState({ showPreviewIframe: true });
-        await this.updateVideoState()
+        await this.updateKnownBackendState()
       }
     } catch (err) {
       console.log(`Caught error: ${err}`);
@@ -128,8 +149,37 @@ class App extends React.Component {
       const result = response.data.result;
       if (result === "ok") {
         await this.awaitableSetState({ showPreviewIframe: false });
-        await this.updateVideoState()
+        await this.updateKnownBackendState()
       }
+    } catch (err) {
+      console.log(`Caught error: ${err}`);
+    }
+  }
+
+  async recordVideoButtonClicked() {
+    if (this.state.videoState !== 'recording') {
+      if (this.state.videoState === 'previewing') {
+        await this.hidePreview();
+      }
+      await this.startVideoRecording()
+    } else {
+      await this.stopVideoRecording()
+    }
+  }
+
+  async startVideoRecording() {
+    try {
+      await axios.get(`${this.state.backendUrl}/start_video_recording`);
+      await this.updateKnownBackendState()
+    } catch (err) {
+      console.log(`Caught error: ${err}`);
+    }
+  }
+
+  async stopVideoRecording() {
+    try {
+      await axios.get(`${this.state.backendUrl}/stop_video_recording`);
+      await this.updateKnownBackendState()
     } catch (err) {
       console.log(`Caught error: ${err}`);
     }
