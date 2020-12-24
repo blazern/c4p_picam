@@ -10,6 +10,7 @@ import subprocess
 import sys
 import time
 import threading
+import traceback
 import yaml
 import json
 
@@ -31,14 +32,31 @@ class VideoState:
 
 class State:
     video_state = VideoState.IDLE
+    recording_camera = None
     stopping_video_preview = False
     stopping_video_recording = False
+    previewing_thread = None
+    recording_thread = None
+
+    def cleanup_previewing_state(self):
+        self.previewing_thread = None
+        self.stopping_video_preview = False
+        self.video_state = VideoState.IDLE
+
+    def cleanup_recording_state(self):
+        self.recording_thread = None
+        self.stopping_video_recording = False
+        self.video_state = VideoState.IDLE
+        if self.recording_camera:
+            self.recording_camera.stop_recording()
+        self.recording_camera = None
 
 class Config:
     video_preview_url = None
     video_preview_cmd = None
 
 MIN_SYSTEM_FREE_SPACE = 100 * 1024 * 1024 # 100 megabytes
+BACKGROUND_TASKS_TIMEOUT_SECS = 10
 STATE = State()
 CONFIG = Config()
 app = Flask(__name__)
@@ -52,6 +70,15 @@ def video_preview_url():
 
 @app.route('/video_state')
 def video_state():
+    # It's a good time to verify that background threads are still alive!
+    if STATE.video_state == VideoState.PREVIEW:
+        if not STATE.previewing_thread or not STATE.previewing_thread.is_alive():
+            logging.error('Previeing fail detected, cleaning up')
+            STATE.cleanup_previewing_state()
+    if STATE.video_state == VideoState.RECORDING:
+        if not STATE.recording_thread or not STATE.recording_thread.is_alive():
+            logging.error('Recording fail detected, cleaning up')
+            STATE.cleanup_recording_state()
     return result_to_json(STATE.video_state)
 
 @app.route('/start_video_preview')
@@ -85,27 +112,30 @@ def start_video_preview():
                             logging.info('Sending SIGKILL signal to video preview')
                             os.killpg(os.getpgid(proc.pid), signal.SIGKILL)
                     break
-        STATE.stopping_video_preview = False
-        STATE.video_state = VideoState.IDLE
+        STATE.cleanup_previewing_state()
         logging.info('Video preview stopped')
 
-    thread = threading.Thread(target=thread_function)
-    thread.start()
+    STATE.previewing_thread = threading.Thread(target=thread_function)
+    STATE.previewing_thread.start()
 
-    while not STATE.video_state == VideoState.PREVIEW:
-        logging.info('Waiting for video preview start...')
-        time.sleep(1)
-
+    if not poll(success_fn = lambda: STATE.video_state == VideoState.PREVIEW,
+                operation_thread = STATE.previewing_thread,
+                operation_name = 'previewing start'):
+        STATE.cleanup_previewing_state()
+        return error_to_json('couldn\'t start previewing')
     return result_to_json('ok')
 
 @app.route('/stop_video_preview')
 def stop_video_preview():
+    result = result_to_json('ok')
     if STATE.video_state == VideoState.PREVIEW:
         STATE.stopping_video_preview = True
-        while STATE.video_state == VideoState.PREVIEW:
-            logging.info('Waiting for video preview stop...')
-            time.sleep(1)
-    return result_to_json('ok')
+        if not poll(success_fn = lambda: STATE.video_state != VideoState.PREVIEW,
+                    operation_thread = STATE.previewing_thread,
+                    operation_name = 'previewing stop'):
+            result = error_to_json('couldn\'t stop previewing')
+    STATE.cleanup_previewing_state()
+    return result
 
 @app.route('/free_space_bytes')
 def free_space_bytes():
@@ -124,8 +154,6 @@ def delete_recorded_videos():
         shutil.rmtree(path)
     return result_to_json('ok')
 
-# TODO: this function needs to be as robust as it's possible -
-#       if recording fails, it needs to be restarted automatically.
 @app.route('/start_video_recording')
 def start_video_recording():
     def is_enough_free_space():
@@ -141,54 +169,106 @@ def start_video_recording():
     def now_str():
         return datetime.now().strftime("%Y_%m_%d__%H_%M_%S")
 
+    # A function for background thread which is used mostly for retry logic.
+    # Retry logic is needed because video recording is the main function of this script
+    # and it's needed to be as robust as possible.
     def thread_function():
-        logging.info('Starting video recording')
-        with picamera.PiCamera() as camera:
-            STATE.video_state = VideoState.RECORDING
-            # camera.resolution = (640, 480)
-            last_video_name = os.path.join(
-                recorded_videos_folder(),
-                '{}.h264'.format(now_str()))
-            logging.info('Starting recording of {}'.format(last_video_name))
-            camera.start_recording(last_video_name)
-            last_recoring_start_time = datetime.now()
+        logging.info('Starting video recording thread')
+        retry_timeout = 1
+        # While recording state is not forgatten and we're not asked to stop
+        while STATE.recording_thread and not STATE.stopping_video_recording:
+            try:
+                with picamera.PiCamera() as camera:
+                    STATE.recording_camera = camera
+                    # Note: we change state only when we obained the camera
+                    # object because it's a fatal scenario when during recording
+                    # start camera object cannot be obtained.
+                    # The main thread must not respond with a success msg in such
+                    # a scenario.
+                    STATE.video_state = VideoState.RECORDING
+                    perform_recording()
+            except Exception as e:
+                critical_error('Caught exception while trying to perform recording: {}'.format(e))
+                logging.error('Caught exception stacktrace: \n{}'.format(traceback.format_exc()))
+                logging.info('Retrying recording in {} sec(s)'.format(retry_timeout))
+                time.sleep(retry_timeout)
+                retry_timeout = min(retry_timeout * 2, 60) # x2 or 1 minute
+        logging.info('Video recording thread stopped')
 
-            while is_enough_free_space() and not STATE.stopping_video_recording:
-                camera.wait_recording(1)
-                passed_time = (datetime.now() - last_recoring_start_time).total_seconds()
-                if CONFIG.recorded_videos_length_seconds < passed_time:
-                    new_video_name = os.path.join(
-                        recorded_videos_folder(),
-                        '{}.h264'.format(now_str()))
-                    logging.info('Stopping recording of {}, starting recording of {}'
-                        .format(last_video_name, new_video_name))
-                    camera.split_recording(new_video_name)
-                    last_recoring_start_time = datetime.now()
-            camera.stop_recording()
-        STATE.stopping_video_recording = False
-        STATE.video_state = VideoState.IDLE
-        logging.info('Video recording stopped')
+    # The actual recording
+    def perform_recording():
+        last_video_name = os.path.join(
+            recorded_videos_folder(),
+            '{}.h264'.format(now_str()))
+        logging.info('Starting recording of {}'.format(last_video_name))
 
-    thread = threading.Thread(target=thread_function)
-    thread.start()
+        STATE.recording_camera.start_recording(last_video_name)
+        last_recoring_start_time = datetime.now()
 
-    while not STATE.video_state == VideoState.RECORDING:
-        logging.info('Waiting for video recording start...')
-        time.sleep(1)
+        while is_enough_free_space() and not STATE.stopping_video_recording:
+            STATE.recording_camera.wait_recording(1)
+            passed_time = (datetime.now() - last_recoring_start_time).total_seconds()
+
+            if CONFIG.recorded_videos_length_seconds < passed_time:
+                new_video_name = os.path.join(
+                    recorded_videos_folder(),
+                    '{}.h264'.format(now_str()))
+                logging.info('Stopping recording of {}, starting recording of {}'
+                    .format(last_video_name, new_video_name))
+                STATE.recording_camera.split_recording(new_video_name)
+                last_recoring_start_time = datetime.now()
+        STATE.cleanup_recording_state()
+
+    STATE.recording_thread = threading.Thread(target=thread_function)
+    STATE.recording_thread.start()
+    if not poll(success_fn = lambda: STATE.video_state == VideoState.RECORDING,
+                operation_thread = STATE.recording_thread,
+                operation_name = 'recording start'):
+        STATE.cleanup_recording_state()
+        return error_to_json('couldn\'t start recording')
+
     return result_to_json('ok')
 
 @app.route('/stop_video_recording')
 def stop_video_recording():
+    result = result_to_json('ok')
     if STATE.video_state == VideoState.RECORDING:
         STATE.stopping_video_recording = True
-        while STATE.video_state == VideoState.RECORDING:
-            logging.info('Waiting for video recording stop...')
-            time.sleep(1)
-    return result_to_json('ok')
+        if not poll(success_fn = lambda: STATE.video_state != VideoState.RECORDING,
+                    operation_thread = STATE.recording_thread,
+                    operation_name = 'recording stop'):
+            result = error_to_json('couldn\'t stop recording')
+    STATE.cleanup_recording_state()
+    return result
 ####################################################################
 ################################HTTP################################
 ####################################################################
 
+# Returns True if success_fn()==True
+# Returns False if timed out OR operation_thread.is_alive()==False
+def poll(success_fn, operation_thread, operation_name):
+    waiting_start = datetime.now()
+    while not success_fn():
+        # Note: we double check for success because of threading
+        if not operation_thread.is_alive() and not success_fn():
+            critical_error('Thread of `{}` is dead but the operation was not successful'.format(operation_name))
+            # success_fn() == False but the thread is Dead - operation has failed
+            return False
+        if BACKGROUND_TASKS_TIMEOUT_SECS < (datetime.now() - waiting_start).total_seconds():
+            if operation_thread.is_alive():
+                critical_error('Operation `{}` timed out but its thread is still alive'.format(operation_name))
+            return False
+        logging.info('Waiting for `{}`...'.format(operation_name))
+        time.sleep(1)
+    return True
+
+# Note that we do not crash on critical errors because the script must
+# be as robust as possible and try to recover even from critical errors.
+def critical_error(error):
+    error_msg = '!! ' + error + ' !!'
+    logging.error('!' * len(error_msg))
+    logging.error(error_msg)
+    logging.error('!' * len(error_msg))
 
 def result_to_json(result):
     return create_response_for(json.dumps({ 'result': result }))
