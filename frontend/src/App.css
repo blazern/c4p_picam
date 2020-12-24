@@ -18,3 +18,32 @@
   font-size: calc(10px + 2vmin);
   color: white;
 }
+
+.LoaderDisplayed {
+  width: 400px;
+  height:300px;
+  position: absolute;
+  z-index:999;
+  top: 50%;
+  left:50%;
+  margin-top: -150px;
+  margin-left: -200px;
+  overflow: auto;
+  opacity:1;
+  transition: opacity 0.5s 0.5s;
+}
+
+.LoaderHidden {
+  width: 400px;
+  height:300px;
+  position: absolute;
+  z-index:999;
+  top: 50%;
+  left:50%;
+  margin-top: -150px;
+  margin-left: -200px;
+  overflow: auto;
+  opacity:0;
+  transition: opacity 0.5s 0.5s;
+  pointer-events: none;
+}

@@ -1,5 +1,7 @@
 import axios from 'axios';
+import Loader from 'react-loader-spinner'
 import React from 'react';
+import "react-loader-spinner/dist/loader/css/react-spinner-loader.css"
 import Cookies from 'universal-cookie';
 
 import './App.css';
@@ -11,7 +13,8 @@ class App extends React.Component {
     super(props)
     this.state = {
       backendUrl: config.backendUrl,
-      previewWidth: window.innerWidth
+      previewWidth: window.innerWidth,
+      loading: 0
     }
     this.previewButtonClicked = this.previewButtonClicked.bind(this);
     this.recordVideoButtonClicked = this.recordVideoButtonClicked.bind(this);
@@ -80,19 +83,24 @@ class App extends React.Component {
     return (
       <div className="App">
       <header className="App-header">
-        <form>
-          <label>
-            {'Backend address: '} 
-            <input type="text" value={this.state.backendUrl} onChange={this.onBackendUrlChange} />
-          </label>
-        </form>
-        <p> Video state: {videoState}, free space: {freeSpaceMegabytes}mb </p>
-        <p>
-          <button disabled={!enablePreview} onClick={this.previewButtonClicked}> {previewButtonMessage}</button>
-          <button disabled={!enableRecording} onClick={this.recordVideoButtonClicked}> {recordButtonMessage}</button>
-        </p>
-        <p> {previewIframe} </p>
-      </header>
+      <div className={this.state.loading ? 'LoaderDisplayed' : 'LoaderHidden'}>
+        <Loader
+          type="Puff"
+          color="#00BFFF"/>
+      </div>
+      <form>
+        <label>
+          {'Backend address: '}
+          <input type="text" value={this.state.backendUrl} onChange={this.onBackendUrlChange} />
+        </label>
+      </form>
+      <p> Video state: {videoState}, free space: {freeSpaceMegabytes}mb </p>
+      <p>
+        <button disabled={!enablePreview || this.state.loading} onClick={this.previewButtonClicked}> {previewButtonMessage}</button>
+        <button disabled={!enableRecording || this.state.loading} onClick={this.recordVideoButtonClicked}> {recordButtonMessage}</button>
+      </p>
+      <p> {previewIframe} </p>
+    </header>
     </div>
     );
   }
@@ -128,11 +136,13 @@ class App extends React.Component {
   }
 
   async previewButtonClicked() {
+    this.setState({ 'loading': this.state.loading + 1 })
     if (this.state.videoState !== 'previewing') {
       await this.showPreview();
     } else {
       await this.hidePreview();
     }
+    this.setState({ 'loading': this.state.loading - 1 })
   }
 
   async showPreview() {
@@ -160,6 +170,7 @@ class App extends React.Component {
   }
 
   async recordVideoButtonClicked() {
+    this.setState({ 'loading': this.state.loading + 1 })
     if (this.state.videoState !== 'recording') {
       if (this.state.videoState === 'previewing') {
         await this.hidePreview();
@@ -168,6 +179,7 @@ class App extends React.Component {
     } else {
       await this.stopVideoRecording()
     }
+    this.setState({ 'loading': this.state.loading - 1 })
   }
 
   async startVideoRecording() {
