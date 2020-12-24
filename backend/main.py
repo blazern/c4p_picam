@@ -279,6 +279,7 @@ def error_to_json(error):
 def create_response_for(string):
     resp = Response(string)
     resp.headers['Access-Control-Allow-Origin'] = '*'
+    resp.headers['Cache-Control'] = 'max-age=0'
     return resp
 
 def get_size_of(path):
