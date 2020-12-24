@@ -10,8 +10,8 @@ class App extends React.Component {
   constructor(props) {
     super(props)
     this.state = {
-      showPreviewIframe: false,
-      backendUrl: config.backendUrl
+      backendUrl: config.backendUrl,
+      previewWidth: window.innerWidth
     }
     this.previewButtonClicked = this.previewButtonClicked.bind(this);
     this.recordVideoButtonClicked = this.recordVideoButtonClicked.bind(this);
@@ -28,6 +28,16 @@ class App extends React.Component {
       await this.awaitableSetState({ 'backendUrl': this.cookies.get('backendUrl') });
     }
     await this.setInitialState();
+
+    window.addEventListener('resize', this.updatePreviewSize.bind(this));
+  }
+
+  componentWillUnmount() {
+    window.removeEventListener('resize', this.updatePreviewSize.bind(this));
+  }
+
+  updatePreviewSize() {
+    this.setState({ previewWidth: window.innerWidth });
   }
 
   async setInitialState() {
@@ -47,9 +57,10 @@ class App extends React.Component {
 
     let previewButtonMessage;
     let previewIframe;
-    if (this.state.showPreviewIframe) {
+    if (this.state.videoState === 'previewing') {
       previewButtonMessage = "Hide Video Preview";
-      previewIframe = <div><iframe src={this.state.previewUrl} width={800} height={600} title="Video Preview"/></div>
+      const width = window.innerWidth;
+      previewIframe = <div><iframe src={this.state.previewUrl} width={width} height={600} title="Video Preview"/></div>
     } else {
       previewButtonMessage = "Show Video Preview";
       previewIframe = "";
@@ -125,14 +136,10 @@ class App extends React.Component {
   }
 
   async showPreview() {
-    if (this.state.showPreviewIframe) {
-      return
-    }
     try {
       const response = await axios.get(`${this.state.backendUrl}/start_video_preview`);
       const result = response.data.result;
       if (result === "ok") {
-        await this.awaitableSetState({ showPreviewIframe: true });
         await this.updateKnownBackendState()
       }
     } catch (err) {
@@ -141,14 +148,10 @@ class App extends React.Component {
   }
 
   async hidePreview() {
-    if (!this.state.showPreviewIframe) {
-      return
-    }
     try {
       const response = await axios.get(`${this.state.backendUrl}/stop_video_preview`);
       const result = response.data.result;
       if (result === "ok") {
-        await this.awaitableSetState({ showPreviewIframe: false });
         await this.updateKnownBackendState()
       }
     } catch (err) {
