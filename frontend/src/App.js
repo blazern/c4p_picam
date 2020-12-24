@@ -33,10 +33,19 @@ class App extends React.Component {
     await this.setInitialState();
 
     window.addEventListener('resize', this.updatePreviewSize.bind(this));
+
+    this.periodicBackendStateUpdate();
   }
 
   componentWillUnmount() {
     window.removeEventListener('resize', this.updatePreviewSize.bind(this));
+  }
+
+  periodicBackendStateUpdate() {
+    setTimeout(async () => {
+      await this.updateKnownBackendState();
+      this.periodicBackendStateUpdate()
+    }, 10000)
   }
 
   updatePreviewSize() {
