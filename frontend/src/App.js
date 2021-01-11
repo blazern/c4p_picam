@@ -22,6 +22,7 @@ class App extends React.Component {
     this.onBackendUrlChange = this.onBackendUrlChange.bind(this);
     this.bitrateSelected = this.bitrateSelected.bind(this);
     this.downloadRecordingsClicked = this.downloadRecordingsClicked.bind(this);
+    this.deleteRecordingsClicked = this.deleteRecordingsClicked.bind(this);
     this.cookies = new Cookies();
   }
 
@@ -94,6 +95,9 @@ class App extends React.Component {
     const enableRecordingsDownload = this.state.videoState !== undefined
                           && this.state.videoState !== "recording"
                           && !this.state.loading;
+    const enableRecordingsDeletion = this.state.videoState !== undefined
+                          && this.state.videoState !== "recording"
+                          && !this.state.loading;
 
     let bitrateOptions = this.state.supportedBitrates.map((bitrate) =>
         <option
@@ -128,6 +132,7 @@ class App extends React.Component {
           </label>
         </form>
         <button disabled={!enableRecordingsDownload} onClick={this.downloadRecordingsClicked}>Скачать записи</button>
+        <button disabled={!enableRecordingsDeletion} onClick={this.deleteRecordingsClicked}>Удалить записи</button>
 
         <p>
           <div className='Header'>Управление видео.</div>
@@ -203,13 +208,13 @@ class App extends React.Component {
   }
 
   async previewButtonClicked() {
-    this.setState({ 'loading': this.state.loading + 1 })
+    this.setState({ 'loading': this.state.loading + 1 });
     if (this.state.videoState !== 'previewing') {
       await this.showPreview();
     } else {
       await this.hidePreview();
     }
-    this.setState({ 'loading': this.state.loading - 1 })
+    this.setState({ 'loading': this.state.loading - 1 });
   }
 
   async showPreview() {
@@ -217,7 +222,7 @@ class App extends React.Component {
       const response = await axios.get(`${this.state.backendUrl}/start_video_preview`);
       const result = response.data.result;
       if (result === "ok") {
-        await this.updateKnownBackendState()
+        await this.updateKnownBackendState();
       }
     } catch (err) {
       console.log(`Caught error: ${err}`);
@@ -229,7 +234,7 @@ class App extends React.Component {
       const response = await axios.get(`${this.state.backendUrl}/stop_video_preview`);
       const result = response.data.result;
       if (result === "ok") {
-        await this.updateKnownBackendState()
+        await this.updateKnownBackendState();
       }
     } catch (err) {
       console.log(`Caught error: ${err}`);
@@ -242,9 +247,9 @@ class App extends React.Component {
       if (this.state.videoState === 'previewing') {
         await this.hidePreview();
       }
-      await this.startVideoRecording()
+      await this.startVideoRecording();
     } else {
-      await this.stopVideoRecording()
+      await this.stopVideoRecording();
     }
     this.setState({ 'loading': this.state.loading - 1 })
   }
@@ -252,7 +257,7 @@ class App extends React.Component {
   async startVideoRecording() {
     try {
       await axios.get(`${this.state.backendUrl}/start_video_recording`);
-      await this.updateKnownBackendState()
+      await this.updateKnownBackendState();
     } catch (err) {
       console.log(`Caught error: ${err}`);
     }
@@ -261,7 +266,7 @@ class App extends React.Component {
   async stopVideoRecording() {
     try {
       await axios.get(`${this.state.backendUrl}/stop_video_recording`);
-      await this.updateKnownBackendState()
+      await this.updateKnownBackendState();
     } catch (err) {
       console.log(`Caught error: ${err}`);
     }
@@ -269,6 +274,21 @@ class App extends React.Component {
 
   downloadRecordingsClicked() {
     window.open(`${this.state.backendUrl}/download_all_recordings`)
+  }
+
+  async deleteRecordingsClicked() {
+    var text = prompt(`Чтобы продолжить, введите: "удалить"`);
+    if (text != null && text.toLowerCase() === "удалить") {
+      try {
+        await axios.get(`${this.state.backendUrl}/delete_recorded_videos`);
+        await this.updateKnownBackendState();
+        alert("Записи удалены");
+      } catch (err) {
+        console.log(`Caught error: ${err}`);
+      }
+    } else {
+      alert("Записи не удалены");
+    }
   }
 }
 
