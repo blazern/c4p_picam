@@ -1,3 +1,4 @@
 flask==1.1.2
 PyYAML==5.1
 psutil==5.7.3
+zipstream-new==1.1.8

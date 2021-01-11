@@ -21,6 +21,7 @@ class App extends React.Component {
     this.recordVideoButtonClicked = this.recordVideoButtonClicked.bind(this);
     this.onBackendUrlChange = this.onBackendUrlChange.bind(this);
     this.bitrateSelected = this.bitrateSelected.bind(this);
+    this.downloadRecordingsClicked = this.downloadRecordingsClicked.bind(this);
     this.cookies = new Cookies();
   }
 
@@ -83,10 +84,16 @@ class App extends React.Component {
     }
 
     const enablePreview = this.state.videoState !== undefined
-                          && this.state.videoState !== "recording";
-    const enableRecording = this.state.videoState !== undefined;
+                          && this.state.videoState !== "recording"
+                          && !this.state.loading;
+    const enableRecording = this.state.videoState !== undefined
+                          && !this.state.loading;
     const enableBitrateChange = this.state.videoState !== undefined
-                          && this.state.videoState !== "recording";
+                          && this.state.videoState !== "recording"
+                          && !this.state.loading;
+    const enableRecordingsDownload = this.state.videoState !== undefined
+                          && this.state.videoState !== "recording"
+                          && !this.state.loading;
 
     let bitrateOptions = this.state.supportedBitrates.map((bitrate) =>
         <option
@@ -111,12 +118,15 @@ class App extends React.Component {
           type="Puff"
           color="#00BFFF"/>
       </div>
-      <form>
-        <label>
-          {'Backend address: '}
-          <input type="text" disabled={this.state.loading} value={this.state.backendUrl} onChange={this.onBackendUrlChange} />
-        </label>
-      </form>
+      <div className="BackendMainSettingsState">
+        <form>
+          <label>
+            {'Backend address: '}
+            <input type="text" disabled={this.state.loading} value={this.state.backendUrl} onChange={this.onBackendUrlChange} />
+          </label>
+        </form>
+        <button disabled={!enableRecordingsDownload} onClick={this.downloadRecordingsClicked}> Download recordings</button>
+      </div>
       <div className='BackendState'>
         <p>
           Video state: {videoState} <br></br>
@@ -124,7 +134,7 @@ class App extends React.Component {
           Bitrate to record:
           <select
             value={defaultBitrate.description}
-            disabled={!enableBitrateChange || this.state.loading}
+            disabled={!enableBitrateChange}
             onChange={this.bitrateSelected}>
               {bitrateOptions}
           </select>
@@ -132,8 +142,8 @@ class App extends React.Component {
 
       </div>
       <p>
-        <button disabled={!enablePreview || this.state.loading} onClick={this.previewButtonClicked}> {previewButtonMessage}</button>
-        <button disabled={!enableRecording || this.state.loading} onClick={this.recordVideoButtonClicked}> {recordButtonMessage}</button>
+        <button disabled={!enablePreview} onClick={this.previewButtonClicked}> {previewButtonMessage}</button>
+        <button disabled={!enableRecording} onClick={this.recordVideoButtonClicked}> {recordButtonMessage}</button>
       </p>
       <p> {previewIframe} </p>
     </header>
@@ -254,6 +264,10 @@ class App extends React.Component {
     } catch (err) {
       console.log(`Caught error: ${err}`);
     }
+  }
+
+  downloadRecordingsClicked() {
+    window.open(`${this.state.backendUrl}/download_all_recordings`)
   }
 }
 

@@ -13,6 +13,8 @@ import threading
 import traceback
 import yaml
 import json
+from zipfile import ZIP_STORED
+import zipstream
 
 try:
     import picamera
@@ -266,6 +268,22 @@ def stop_video_recording():
             result = error_to_json('couldn\'t stop recording')
     STATE.cleanup_recording_state()
     return result
+
+@app.route('/download_all_recordings')
+def download_all_recordings():
+    def generate_zip():
+        stream = zipstream.ZipFile(mode='w', compression=zipstream.ZIP_DEFLATED)
+        for filename in os.listdir(recorded_videos_folder()):
+            path = os.path.join(recorded_videos_folder(), filename)
+            if os.path.isdir(path):
+                continue
+            stream.write(path, arcname=filename, compress_type=ZIP_STORED)
+            yield from stream.flush()
+        yield from stream
+    response = Response(generate_zip(), mimetype='application/zip')
+    response.headers['Content-Disposition'] = 'attachment; filename={}'.format('recordings.zip')
+    return response
+
 ####################################################################
 ################################HTTP################################
 ####################################################################
@@ -325,6 +343,7 @@ def recorded_videos_folder():
     path = CONFIG.recorded_videos_folder
     os.makedirs(path, exist_ok=True)
     return path
+
 
 def main(argv):
     logging.getLogger().setLevel(logging.INFO)

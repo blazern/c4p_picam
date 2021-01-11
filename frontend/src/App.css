@@ -19,6 +19,10 @@
   color: white;
 }
 
+.BackendMainSettingsState {
+  text-align: start;
+}
+
 .BackendState {
   text-align: start;
 }
