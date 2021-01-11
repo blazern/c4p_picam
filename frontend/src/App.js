@@ -14,11 +14,13 @@ class App extends React.Component {
     this.state = {
       backendUrl: config.backendUrl,
       previewWidth: window.innerWidth,
+      supportedBitrates: [],
       loading: 0
     }
     this.previewButtonClicked = this.previewButtonClicked.bind(this);
     this.recordVideoButtonClicked = this.recordVideoButtonClicked.bind(this);
     this.onBackendUrlChange = this.onBackendUrlChange.bind(this);
+    this.bitrateSelected = this.bitrateSelected.bind(this);
     this.cookies = new Cookies();
   }
 
@@ -30,7 +32,7 @@ class App extends React.Component {
     if (this.cookies.get('backendUrl')) {
       await this.awaitableSetState({ 'backendUrl': this.cookies.get('backendUrl') });
     }
-    await this.setInitialState();
+    await this.updateKnownBackendState();
 
     window.addEventListener('resize', this.updatePreviewSize.bind(this));
 
@@ -50,11 +52,6 @@ class App extends React.Component {
 
   updatePreviewSize() {
     this.setState({ previewWidth: window.innerWidth });
-  }
-
-  async setInitialState() {
-    await this.updateKnownBackendState();
-    await this.updatePreviewUrl();
   }
 
   render() {
@@ -88,6 +85,23 @@ class App extends React.Component {
     const enablePreview = this.state.videoState !== undefined
                           && this.state.videoState !== "recording";
     const enableRecording = this.state.videoState !== undefined;
+    const enableBitrateChange = this.state.videoState !== undefined
+                          && this.state.videoState !== "recording";
+
+    let bitrateOptions = this.state.supportedBitrates.map((bitrate) =>
+        <option
+          key={bitrate.name}>
+            {bitrate.description}
+        </option>
+    );
+    let defaultBitrate;
+    if (this.state.bitrate) {
+      defaultBitrate = this.state.bitrate;
+    } else if (this.state.supportedBitrates[0]) {
+      defaultBitrate = this.state.supportedBitrates[0];
+    } else {
+      defaultBitrate = { description: 'N/A' }
+    }
 
     return (
       <div className="App">
@@ -100,10 +114,23 @@ class App extends React.Component {
       <form>
         <label>
           {'Backend address: '}
-          <input type="text" value={this.state.backendUrl} onChange={this.onBackendUrlChange} />
+          <input type="text" disabled={this.state.loading} value={this.state.backendUrl} onChange={this.onBackendUrlChange} />
         </label>
       </form>
-      <p> Video state: {videoState}, free space: {freeSpaceMegabytes}mb </p>
+      <div className='BackendState'>
+        <p>
+          Video state: {videoState} <br></br>
+          Free space: {freeSpaceMegabytes}mb <br></br>
+          Bitrate to record:
+          <select
+            value={defaultBitrate.description}
+            disabled={!enableBitrateChange || this.state.loading}
+            onChange={this.bitrateSelected}>
+              {bitrateOptions}
+          </select>
+        </p>
+
+      </div>
       <p>
         <button disabled={!enablePreview || this.state.loading} onClick={this.previewButtonClicked}> {previewButtonMessage}</button>
         <button disabled={!enableRecording || this.state.loading} onClick={this.recordVideoButtonClicked}> {recordButtonMessage}</button>
@@ -117,30 +144,50 @@ class App extends React.Component {
   async onBackendUrlChange(event) {
     this.cookies.set('backendUrl', event.target.value);
     await this.awaitableSetState({ backendUrl: event.target.value });
-    await this.setInitialState();
+    await this.updateKnownBackendState();
+  }
+
+  async bitrateSelected(event) {
+    const newBitrate = this.state.supportedBitrates.find(b => b.description === event.target.value)
+    try {
+      const response = await axios.get(`${this.state.backendUrl}/set_bitrate?bitrate=${newBitrate.name}`);
+      const result = response.data.result;
+      if (result === "ok") {
+        await this.updateKnownBackendState()
+      }
+    } catch (err) {
+      console.log(`Caught error: ${err}`);
+    }
   }
 
   async updateKnownBackendState() {
     try {
-      const response1 = await axios.get(`${this.state.backendUrl}/video_state`);
-      const videoState = response1.data.result;
-      const response2 = await axios.get(`${this.state.backendUrl}/free_space_bytes`);
-      const freeSpaceBytes = response2.data.result;
-      this.setState({ videoState: videoState, freeSpaceBytes: freeSpaceBytes });
-    } catch (err) {
-      console.log(`Caught error: ${err}`);
-      this.setState({ videoState: undefined, freeSpaceBytes: 0 });
-    }
-  }
+      const response = await axios.get(`${this.state.backendUrl}/global_state`);
+      const result = response.data.result;
+      const previewUrl = result.video_preview_url;
+      const videoState = result.video_state;
+      const freeSpaceBytes = result.free_space_bytes;
 
-  async updatePreviewUrl() {
-    try {
-      const response = await axios.get(`${this.state.backendUrl}/video_preview_url`);
-      const previewUrl = response.data.result;
-      this.setState({ previewUrl: previewUrl });
+      const supportedBitrates = result.supported_bitrates;
+      const bitrateName = result.bitrate;
+      const bitrate = supportedBitrates.find(b => b.name === bitrateName);
+
+      this.setState({
+        previewUrl: previewUrl,
+        videoState: videoState,
+        freeSpaceBytes: freeSpaceBytes,
+        bitrate: bitrate,
+        supportedBitrates: supportedBitrates
+      });
     } catch (err) {
       console.log(`Caught error: ${err}`);
-      this.setState({ previewUrl: '' });
+      this.setState({
+        previewUrl: '',
+        videoState: undefined,
+        freeSpaceBytes: 0,
+        bitrate: undefined,
+        supportedBitrates: []
+      });
     }
   }
 

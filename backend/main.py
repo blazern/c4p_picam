@@ -21,7 +21,7 @@ except ModuleNotFoundError:
     print('!!! CANNOT IMPORT picamera - ALL WORK WITH CAMERA WILL FAIL !!!')
     print('!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!')
 
-from flask import Flask, url_for, Response
+from flask import Flask, url_for, Response, request
 from markupsafe import escape
 
 class VideoState:
@@ -29,6 +29,23 @@ class VideoState:
     PREVIEW = 'previewing'
     RECORDING = 'recording'
     INSUFFICIENT_STORAGE = 'insufficient storage'
+
+class Bitrate:
+    def __init__(self, description, name, value):
+        self.description = description
+        self.name = name
+        self.value = value
+
+class Bitrates(Enum):
+    MBIT_1 = Bitrate('1 Mbit/s (±YouTube 480p)', '1', 1000000)
+    MBIT_2_5 = Bitrate('2.5 Mbit/s (±YouTube 720p)', '2.5', 2500000)
+    MBIT_4_5 = Bitrate('4.5 Mbit/s (±YouTube 1080p)', '4.5', 4500000)
+    @staticmethod
+    def from_name(name):
+        for bitrate in list(Bitrates):
+            if bitrate.value.name == name:
+                return bitrate
+        raise ValueError('Could not find a bitrate with short name {}'.format(name))
 
 class State:
     video_state = VideoState.IDLE
@@ -64,12 +81,8 @@ app = Flask(__name__)
 ####################################################################
 ################################HTTP################################
 ####################################################################
-@app.route('/video_preview_url')
-def video_preview_url():
-    return result_to_json(CONFIG.video_preview_url)
-
-@app.route('/video_state')
-def video_state():
+@app.route('/global_state')
+def global_state():
     # It's a good time to verify that background threads are still alive!
     if STATE.video_state == VideoState.PREVIEW:
         if not STATE.previewing_thread or not STATE.previewing_thread.is_alive():
@@ -79,7 +92,27 @@ def video_state():
         if not STATE.recording_thread or not STATE.recording_thread.is_alive():
             logging.error('Recording fail detected, cleaning up')
             STATE.cleanup_recording_state()
-    return result_to_json(STATE.video_state)
+
+    supported_bitrates = list(
+        map(lambda b: (b.value.__dict__), list(Bitrates)))
+
+    state = {
+        'video_preview_url': CONFIG.video_preview_url,
+        'video_state': STATE.video_state,
+        'free_space_bytes': system_free_space(),
+        'recorded_videos_size_bytes': get_size_of(recorded_videos_folder()),
+        'bitrate': STATE.bitrate.name,
+        'supported_bitrates': supported_bitrates
+    }
+    return result_to_json(state)
+
+@app.route('/set_bitrate')
+def set_bitrate():
+    if STATE.video_state == VideoState.RECORDING:
+        return error_to_json('Cannot change bitrate while recording')
+    input_bitrate = request.args.get('bitrate')
+    STATE.bitrate = Bitrates.from_name(input_bitrate).value
+    return result_to_json('ok')
 
 @app.route('/start_video_preview')
 def start_video_preview():
@@ -137,14 +170,6 @@ def stop_video_preview():
     STATE.cleanup_previewing_state()
     return result
 
-@app.route('/free_space_bytes')
-def free_space_bytes():
-    return result_to_json(system_free_space())
-
-@app.route('/recorded_videos_size_bytes')
-def recorded_videos_size_bytes():
-    return result_to_json(get_size_of(recorded_videos_folder()))
-
 @app.route('/delete_recorded_videos')
 def delete_recorded_videos():
     if STATE.video_state == VideoState.RECORDING:
@@ -200,9 +225,10 @@ def start_video_recording():
         last_video_name = os.path.join(
             recorded_videos_folder(),
             '{}.h264'.format(now_str()))
-        logging.info('Starting recording of {}'.format(last_video_name))
+        logging.info('Starting recording of {} with bitrate {}'
+            .format(last_video_name, STATE.bitrate.name))
 
-        STATE.recording_camera.start_recording(last_video_name)
+        STATE.recording_camera.start_recording(last_video_name, bitrate=STATE.bitrate.value)
         last_recoring_start_time = datetime.now()
 
         while is_enough_free_space() and not STATE.stopping_video_recording:
@@ -320,12 +346,16 @@ def main(argv):
                         + 'For manual testing you can use any URL.')
     parser.add_argument('--recorded-videos-folder', required=True)
     parser.add_argument('--recorded-videos-length-seconds', type=int, default=300)
+    parser.add_argument('--bitrate', choices=list(map(lambda b: b.value.name, list(Bitrates))),
+                        default=Bitrates.MBIT_2_5.value.name,
+                        help='Bitrate of recorded videos in Mbit/s')
     options = parser.parse_args()
 
     CONFIG.video_preview_url = options.video_preview_url
     CONFIG.video_preview_cmd = options.video_preview_cmd
     CONFIG.recorded_videos_folder = options.recorded_videos_folder
     CONFIG.recorded_videos_length_seconds = options.recorded_videos_length_seconds
+    STATE.bitrate = Bitrates.from_name(options.bitrate).value
 
     # Single process and single thread so that it would be easier to handle requests.
     # And also because there's expected to be no more than a couple of clients (preferrably 1).
