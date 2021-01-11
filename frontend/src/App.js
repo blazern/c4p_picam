@@ -56,7 +56,7 @@ class App extends React.Component {
   }
 
   render() {
-    let videoState = "Video state unknown";
+    let videoState = "Состояние неизвестно";
     if (this.state.videoState) {
       videoState = this.state.videoState;
     }
@@ -68,19 +68,19 @@ class App extends React.Component {
     let previewButtonMessage;
     let previewIframe;
     if (this.state.videoState === 'previewing') {
-      previewButtonMessage = "Hide Video Preview";
+      previewButtonMessage = "Спрятать превью";
       const width = window.innerWidth;
       previewIframe = <div><iframe src={this.state.previewUrl} width={width} height={600} title="Video Preview"/></div>
     } else {
-      previewButtonMessage = "Show Video Preview";
+      previewButtonMessage = "Показать превью";
       previewIframe = "";
     }
 
     let recordButtonMessage;
     if (this.state.videoState === "recording") {
-      recordButtonMessage = "Stop Video Recording";
+      recordButtonMessage = "Остановить запись";
     } else {
-      recordButtonMessage = "Start Video Recording";
+      recordButtonMessage = "Начать запись";
     }
 
     const enablePreview = this.state.videoState !== undefined
@@ -118,20 +118,22 @@ class App extends React.Component {
           type="Puff"
           color="#00BFFF"/>
       </div>
-      <div className="BackendMainSettingsState">
+
+      <div className="MainContent">
+        <div className='Header'>Основное управление камерой.</div>
         <form>
           <label>
-            {'Backend address: '}
+            {`Адрес backend'а: `}
             <input type="text" disabled={this.state.loading} value={this.state.backendUrl} onChange={this.onBackendUrlChange} />
           </label>
         </form>
-        <button disabled={!enableRecordingsDownload} onClick={this.downloadRecordingsClicked}> Download recordings</button>
-      </div>
-      <div className='BackendState'>
+        <button disabled={!enableRecordingsDownload} onClick={this.downloadRecordingsClicked}>Скачать записи</button>
+
         <p>
-          Video state: {videoState} <br></br>
-          Free space: {freeSpaceMegabytes}mb <br></br>
-          Bitrate to record:
+          <div className='Header'>Управление видео.</div>
+          Состояние видео: {videoState} <br></br>
+          Свободного места: {freeSpaceMegabytes}mb <br></br>
+          Bitrate записи:
           <select
             value={defaultBitrate.description}
             disabled={!enableBitrateChange}
@@ -139,12 +141,11 @@ class App extends React.Component {
               {bitrateOptions}
           </select>
         </p>
-
+        <p>
+          <button disabled={!enablePreview} onClick={this.previewButtonClicked}> {previewButtonMessage}</button>
+          <button disabled={!enableRecording} onClick={this.recordVideoButtonClicked}> {recordButtonMessage}</button>
+        </p>
       </div>
-      <p>
-        <button disabled={!enablePreview} onClick={this.previewButtonClicked}> {previewButtonMessage}</button>
-        <button disabled={!enableRecording} onClick={this.recordVideoButtonClicked}> {recordButtonMessage}</button>
-      </p>
       <p> {previewIframe} </p>
     </header>
     </div>

@@ -19,12 +19,30 @@
   color: white;
 }
 
-.BackendMainSettingsState {
-  text-align: start;
+button { 
+    font-size: calc(5px + 2vmin);
+    margin-top: calc(2px);
+    margin-right: calc(2px);
+    margin-bottom: calc(2px);
+    margin-left: calc(2px);
 }
 
-.BackendState {
+input { 
+    font-size: calc(5px + 2vmin);
+}
+
+select { 
+    font-size: calc(5px + 2vmin);
+}
+
+.Header {
+  font-size: calc(20px + 2vmin);
+  font-weight: bold;
+}
+
+.MainContent {
   text-align: start;
+  margin-left: calc(3px + 2vmin);
 }
 
 .LoaderDisplayed {
