@@ -39,9 +39,9 @@ class Bitrate:
         self.value = value
 
 class Bitrates(Enum):
-    MBIT_1 = Bitrate('1 Mbit/s (±YouTube 480p)', '1', 1000000)
-    MBIT_2_5 = Bitrate('2.5 Mbit/s (±YouTube 720p)', '2.5', 2500000)
-    MBIT_4_5 = Bitrate('4.5 Mbit/s (±YouTube 1080p)', '4.5', 4500000)
+    MBIT_1 = Bitrate('1 Mbit/s (YouTube 480p)', '1', 1000000)
+    MBIT_2_5 = Bitrate('2.5 Mbit/s (YouTube 720p)', '2.5', 2500000)
+    MBIT_4_5 = Bitrate('4.5 Mbit/s (YouTube 1080p)', '4.5', 4500000)
     @staticmethod
     def from_name(name):
         for bitrate in list(Bitrates):
