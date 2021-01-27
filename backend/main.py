@@ -78,6 +78,13 @@ MIN_SYSTEM_FREE_SPACE = 100 * 1024 * 1024 # 100 megabytes
 BACKGROUND_TASKS_TIMEOUT_SECS = 10
 STATE = State()
 CONFIG = Config()
+# The server uses complex in-memory state and therefore cannot simply serve
+# multiple requests simultaneously.
+# But at the same time there're long operation which must not block the server
+# (currently there's only 1 such an operation - videos downloading).
+# As a good compromise the server allows only 1 process but multiple threads,
+# and all short operations use LOCK to dissallow their async calls.
+LOCK = threading.Lock()
 app = Flask(__name__)
 
 ####################################################################
@@ -85,204 +92,215 @@ app = Flask(__name__)
 ####################################################################
 @app.route('/global_state')
 def global_state():
-    # It's a good time to verify that background threads are still alive!
-    if STATE.video_state == VideoState.PREVIEW:
-        if not STATE.previewing_thread or not STATE.previewing_thread.is_alive():
-            logging.error('Previeing fail detected, cleaning up')
-            STATE.cleanup_previewing_state()
-    if STATE.video_state == VideoState.RECORDING:
-        if not STATE.recording_thread or not STATE.recording_thread.is_alive():
-            logging.error('Recording fail detected, cleaning up')
-            STATE.cleanup_recording_state()
+    with LOCK:
+        # It's a good time to verify that background threads are still alive!
+        if STATE.video_state == VideoState.PREVIEW:
+            if not STATE.previewing_thread or not STATE.previewing_thread.is_alive():
+                logging.error('Previeing fail detected, cleaning up')
+                STATE.cleanup_previewing_state()
+        if STATE.video_state == VideoState.RECORDING:
+            if not STATE.recording_thread or not STATE.recording_thread.is_alive():
+                logging.error('Recording fail detected, cleaning up')
+                STATE.cleanup_recording_state()
 
-    supported_bitrates = list(
-        map(lambda b: (b.value.__dict__), list(Bitrates)))
+        supported_bitrates = list(
+            map(lambda b: (b.value.__dict__), list(Bitrates)))
 
-    state = {
-        'video_preview_url': CONFIG.video_preview_url,
-        'video_state': STATE.video_state,
-        'free_space_bytes': system_free_space(),
-        'recorded_videos_size_bytes': get_size_of(recorded_videos_folder()),
-        'bitrate': STATE.bitrate.name,
-        'supported_bitrates': supported_bitrates
-    }
-    return result_to_json(state)
+        state = {
+            'video_preview_url': CONFIG.video_preview_url,
+            'video_state': STATE.video_state,
+            'free_space_bytes': system_free_space(),
+            'recorded_videos_size_bytes': get_size_of(recorded_videos_folder()),
+            'bitrate': STATE.bitrate.name,
+            'supported_bitrates': supported_bitrates
+        }
+        return result_to_json(state)
 
 @app.route('/set_bitrate')
 def set_bitrate():
-    if STATE.video_state == VideoState.RECORDING:
-        return error_to_json('Cannot change bitrate while recording')
-    input_bitrate = request.args.get('bitrate')
-    STATE.bitrate = Bitrates.from_name(input_bitrate).value
-    return result_to_json('ok')
+    with LOCK:
+        if STATE.video_state == VideoState.RECORDING:
+            return error_to_json('Cannot change bitrate while recording')
+        input_bitrate = request.args.get('bitrate')
+        STATE.bitrate = Bitrates.from_name(input_bitrate).value
+        return result_to_json('ok')
 
 @app.route('/start_video_preview')
 def start_video_preview():
-    if STATE.video_state == VideoState.PREVIEW:
-        return result_to_json('ok')
-    elif STATE.video_state == VideoState.RECORDING:
-        return error_to_json('cannot preview while recording in progress')
+    with LOCK:
+        if STATE.video_state == VideoState.PREVIEW:
+            return result_to_json('ok')
+        elif STATE.video_state == VideoState.RECORDING:
+            return error_to_json('cannot preview while recording in progress')
 
-    def thread_function():
-        STATE.video_state = VideoState.PREVIEW
-        while not STATE.stopping_video_preview:
-            logging.info('Starting video preview by {}'.format(CONFIG.video_preview_cmd))
-            proc = subprocess.Popen(CONFIG.video_preview_cmd,
-                                    stdout=subprocess.PIPE,
-                                    shell=True,
-                                    preexec_fn=os.setsid)
-            while True:
-                time.sleep(1)
-                if proc.poll() is not None:
-                    logging.info('Video preview process has died - restarting')
-                    break
-                if STATE.stopping_video_preview:
-                    logging.info('Stopping video preview')
-                    if proc.poll() is None:
-                        logging.info('Sending SIGTERM signal to video preview')
-                        # Kill the process if it's still alive
-                        os.killpg(os.getpgid(proc.pid), signal.SIGTERM)
-                        time.sleep(3)
+        def thread_function():
+            STATE.video_state = VideoState.PREVIEW
+            while not STATE.stopping_video_preview:
+                logging.info('Starting video preview by {}'.format(CONFIG.video_preview_cmd))
+                proc = subprocess.Popen(CONFIG.video_preview_cmd,
+                                        stdout=subprocess.PIPE,
+                                        shell=True,
+                                        preexec_fn=os.setsid)
+                while True:
+                    time.sleep(1)
+                    if proc.poll() is not None:
+                        logging.info('Video preview process has died - restarting')
+                        break
+                    if STATE.stopping_video_preview:
+                        logging.info('Stopping video preview')
                         if proc.poll() is None:
-                            logging.info('Sending SIGKILL signal to video preview')
-                            os.killpg(os.getpgid(proc.pid), signal.SIGKILL)
-                    break
-        STATE.cleanup_previewing_state()
-        logging.info('Video preview stopped')
+                            logging.info('Sending SIGTERM signal to video preview')
+                            # Kill the process if it's still alive
+                            os.killpg(os.getpgid(proc.pid), signal.SIGTERM)
+                            time.sleep(3)
+                            if proc.poll() is None:
+                                logging.info('Sending SIGKILL signal to video preview')
+                                os.killpg(os.getpgid(proc.pid), signal.SIGKILL)
+                        break
+            STATE.cleanup_previewing_state()
+            logging.info('Video preview stopped')
 
-    STATE.previewing_thread = threading.Thread(target=thread_function)
-    STATE.previewing_thread.start()
+        STATE.previewing_thread = threading.Thread(target=thread_function)
+        STATE.previewing_thread.start()
 
-    if not poll(success_fn = lambda: STATE.video_state == VideoState.PREVIEW,
-                operation_thread = STATE.previewing_thread,
-                operation_name = 'previewing start'):
-        STATE.cleanup_previewing_state()
-        return error_to_json('couldn\'t start previewing')
-    return result_to_json('ok')
+        if not poll(success_fn = lambda: STATE.video_state == VideoState.PREVIEW,
+                    operation_thread = STATE.previewing_thread,
+                    operation_name = 'previewing start'):
+            STATE.cleanup_previewing_state()
+            return error_to_json('couldn\'t start previewing')
+        return result_to_json('ok')
 
 @app.route('/stop_video_preview')
 def stop_video_preview():
-    result = result_to_json('ok')
-    if STATE.video_state == VideoState.PREVIEW:
-        STATE.stopping_video_preview = True
-        if not poll(success_fn = lambda: STATE.video_state != VideoState.PREVIEW,
-                    operation_thread = STATE.previewing_thread,
-                    operation_name = 'previewing stop'):
-            result = error_to_json('couldn\'t stop previewing')
-    STATE.cleanup_previewing_state()
-    return result
+    with LOCK:
+        result = result_to_json('ok')
+        if STATE.video_state == VideoState.PREVIEW:
+            STATE.stopping_video_preview = True
+            if not poll(success_fn = lambda: STATE.video_state != VideoState.PREVIEW,
+                        operation_thread = STATE.previewing_thread,
+                        operation_name = 'previewing stop'):
+                result = error_to_json('couldn\'t stop previewing')
+        STATE.cleanup_previewing_state()
+        return result
 
 @app.route('/delete_recorded_videos')
 def delete_recorded_videos():
-    if STATE.video_state == VideoState.RECORDING:
-        return error_to_json('cannot remove recorded videos during recording')
-    path = recorded_videos_folder()
-    if os.path.exists(path) and os.path.isdir(path):
-        shutil.rmtree(path)
-    return result_to_json('ok')
+    with LOCK:
+        if STATE.video_state == VideoState.RECORDING:
+            return error_to_json('cannot remove recorded videos during recording')
+        path = recorded_videos_folder()
+        if os.path.exists(path) and os.path.isdir(path):
+            shutil.rmtree(path)
+        return result_to_json('ok')
 
 @app.route('/start_video_recording')
 def start_video_recording():
-    def is_enough_free_space():
-        return MIN_SYSTEM_FREE_SPACE < system_free_space()
+    with LOCK:
+        def is_enough_free_space():
+            return MIN_SYSTEM_FREE_SPACE < system_free_space()
 
-    if STATE.video_state == VideoState.PREVIEW:
-        return error_to_json('cannot record while previewing in progress')
-    elif STATE.video_state == VideoState.RECORDING:
+        if STATE.video_state == VideoState.PREVIEW:
+            return error_to_json('cannot record while previewing in progress')
+        elif STATE.video_state == VideoState.RECORDING:
+            return result_to_json('ok')
+        elif not is_enough_free_space():
+            return error_to_json('not enough of free space')
+
+        def now_str():
+            return datetime.now().strftime("%Y_%m_%d__%H_%M_%S")
+
+        # A function for background thread which is used mostly for retry logic.
+        # Retry logic is needed because video recording is the main function of this script
+        # and it's needed to be as robust as possible.
+        def thread_function():
+            logging.info('Starting video recording thread')
+            retry_timeout = 1
+            # While recording state is not forgatten and we're not asked to stop
+            while STATE.recording_thread and not STATE.stopping_video_recording:
+                try:
+                    with picamera.PiCamera() as camera:
+                        STATE.recording_camera = camera
+                        # Note: we change state only when we obained the camera
+                        # object because it's a fatal scenario when during recording
+                        # start camera object cannot be obtained.
+                        # The main thread must not respond with a success msg in such
+                        # a scenario.
+                        STATE.video_state = VideoState.RECORDING
+                        perform_recording()
+                except Exception as e:
+                    critical_error('Caught exception while trying to perform recording: {}'.format(e))
+                    logging.error('Caught exception stacktrace: \n{}'.format(traceback.format_exc()))
+                    logging.info('Retrying recording in {} sec(s)'.format(retry_timeout))
+                    time.sleep(retry_timeout)
+                    retry_timeout = min(retry_timeout * 2, 60) # x2 or 1 minute
+            logging.info('Video recording thread stopped')
+
+        # The actual recording
+        def perform_recording():
+            last_video_name = os.path.join(
+                recorded_videos_folder(),
+                '{}.h264'.format(now_str()))
+            logging.info('Starting recording of {} with bitrate {}'
+                .format(last_video_name, STATE.bitrate.name))
+
+            STATE.recording_camera.start_recording(last_video_name, bitrate=STATE.bitrate.value)
+            last_recoring_start_time = datetime.now()
+
+            while is_enough_free_space() and not STATE.stopping_video_recording:
+                STATE.recording_camera.wait_recording(1)
+                passed_time = (datetime.now() - last_recoring_start_time).total_seconds()
+
+                if CONFIG.recorded_videos_length_seconds < passed_time:
+                    new_video_name = os.path.join(
+                        recorded_videos_folder(),
+                        '{}.h264'.format(now_str()))
+                    logging.info('Stopping recording of {}, starting recording of {}'
+                        .format(last_video_name, new_video_name))
+                    STATE.recording_camera.split_recording(new_video_name)
+                    last_recoring_start_time = datetime.now()
+            STATE.cleanup_recording_state()
+
+        STATE.recording_thread = threading.Thread(target=thread_function)
+        STATE.recording_thread.start()
+        if not poll(success_fn = lambda: STATE.video_state == VideoState.RECORDING,
+                    operation_thread = STATE.recording_thread,
+                    operation_name = 'recording start'):
+            STATE.cleanup_recording_state()
+            return error_to_json('couldn\'t start recording')
+
         return result_to_json('ok')
-    elif not is_enough_free_space():
-        return error_to_json('not enough of free space')
-
-    def now_str():
-        return datetime.now().strftime("%Y_%m_%d__%H_%M_%S")
-
-    # A function for background thread which is used mostly for retry logic.
-    # Retry logic is needed because video recording is the main function of this script
-    # and it's needed to be as robust as possible.
-    def thread_function():
-        logging.info('Starting video recording thread')
-        retry_timeout = 1
-        # While recording state is not forgatten and we're not asked to stop
-        while STATE.recording_thread and not STATE.stopping_video_recording:
-            try:
-                with picamera.PiCamera() as camera:
-                    STATE.recording_camera = camera
-                    # Note: we change state only when we obained the camera
-                    # object because it's a fatal scenario when during recording
-                    # start camera object cannot be obtained.
-                    # The main thread must not respond with a success msg in such
-                    # a scenario.
-                    STATE.video_state = VideoState.RECORDING
-                    perform_recording()
-            except Exception as e:
-                critical_error('Caught exception while trying to perform recording: {}'.format(e))
-                logging.error('Caught exception stacktrace: \n{}'.format(traceback.format_exc()))
-                logging.info('Retrying recording in {} sec(s)'.format(retry_timeout))
-                time.sleep(retry_timeout)
-                retry_timeout = min(retry_timeout * 2, 60) # x2 or 1 minute
-        logging.info('Video recording thread stopped')
-
-    # The actual recording
-    def perform_recording():
-        last_video_name = os.path.join(
-            recorded_videos_folder(),
-            '{}.h264'.format(now_str()))
-        logging.info('Starting recording of {} with bitrate {}'
-            .format(last_video_name, STATE.bitrate.name))
-
-        STATE.recording_camera.start_recording(last_video_name, bitrate=STATE.bitrate.value)
-        last_recoring_start_time = datetime.now()
-
-        while is_enough_free_space() and not STATE.stopping_video_recording:
-            STATE.recording_camera.wait_recording(1)
-            passed_time = (datetime.now() - last_recoring_start_time).total_seconds()
-
-            if CONFIG.recorded_videos_length_seconds < passed_time:
-                new_video_name = os.path.join(
-                    recorded_videos_folder(),
-                    '{}.h264'.format(now_str()))
-                logging.info('Stopping recording of {}, starting recording of {}'
-                    .format(last_video_name, new_video_name))
-                STATE.recording_camera.split_recording(new_video_name)
-                last_recoring_start_time = datetime.now()
-        STATE.cleanup_recording_state()
-
-    STATE.recording_thread = threading.Thread(target=thread_function)
-    STATE.recording_thread.start()
-    if not poll(success_fn = lambda: STATE.video_state == VideoState.RECORDING,
-                operation_thread = STATE.recording_thread,
-                operation_name = 'recording start'):
-        STATE.cleanup_recording_state()
-        return error_to_json('couldn\'t start recording')
-
-    return result_to_json('ok')
 
 @app.route('/stop_video_recording')
 def stop_video_recording():
-    result = result_to_json('ok')
-    if STATE.video_state == VideoState.RECORDING:
-        STATE.stopping_video_recording = True
-        if not poll(success_fn = lambda: STATE.video_state != VideoState.RECORDING,
-                    operation_thread = STATE.recording_thread,
-                    operation_name = 'recording stop'):
-            result = error_to_json('couldn\'t stop recording')
-    STATE.cleanup_recording_state()
-    return result
+    with LOCK:
+        result = result_to_json('ok')
+        if STATE.video_state == VideoState.RECORDING:
+            STATE.stopping_video_recording = True
+            if not poll(success_fn = lambda: STATE.video_state != VideoState.RECORDING,
+                        operation_thread = STATE.recording_thread,
+                        operation_name = 'recording stop'):
+                result = error_to_json('couldn\'t stop recording')
+        STATE.cleanup_recording_state()
+        return result
 
 @app.route('/download_all_recordings')
 def download_all_recordings():
-    def generate_zip():
-        stream = zipstream.ZipFile(mode='w', compression=zipstream.ZIP_DEFLATED, allowZip64=True)
-        for filename in os.listdir(recorded_videos_folder()):
-            path = os.path.join(recorded_videos_folder(), filename)
-            if os.path.isdir(path):
-                continue
-            stream.write(path, arcname=filename, compress_type=ZIP_STORED)
-            yield from stream.flush()
-        yield from stream
-    response = Response(generate_zip(), mimetype='application/zip')
-    response.headers['Content-Disposition'] = 'attachment; filename={}'.format('recordings.zip')
-    return response
+    # NOTE: even though the LOCK is used here, we give the create Response object a stream generator,
+    # which is not locked, and therefore server's clients can use other commands while they download
+    # videos.
+    with LOCK:
+        def generate_zip():
+            stream = zipstream.ZipFile(mode='w', compression=zipstream.ZIP_DEFLATED, allowZip64=True)
+            for filename in os.listdir(recorded_videos_folder()):
+                path = os.path.join(recorded_videos_folder(), filename)
+                if os.path.isdir(path):
+                    continue
+                stream.write(path, arcname=filename, compress_type=ZIP_STORED)
+                yield from stream.flush()
+            yield from stream
+        response = Response(generate_zip(), mimetype='application/zip')
+        response.headers['Content-Disposition'] = 'attachment; filename={}'.format('recordings.zip')
+        return response
 
 ####################################################################
 ################################HTTP################################
@@ -376,9 +394,8 @@ def main(argv):
     CONFIG.recorded_videos_length_seconds = options.recorded_videos_length_seconds
     STATE.bitrate = Bitrates.from_name(options.bitrate).value
 
-    # Single process and single thread so that it would be easier to handle requests.
-    # And also because there's expected to be no more than a couple of clients (preferrably 1).
-    app.run(host=options.host, port=options.port, threaded=False, processes=1)
+    # See LOCK description for info about process=1
+    app.run(host=options.host, port=options.port, threaded=True, processes=1)
 
 if __name__ == "__main__":
     try:
