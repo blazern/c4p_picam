@@ -272,7 +272,7 @@ def stop_video_recording():
 @app.route('/download_all_recordings')
 def download_all_recordings():
     def generate_zip():
-        stream = zipstream.ZipFile(mode='w', compression=zipstream.ZIP_DEFLATED)
+        stream = zipstream.ZipFile(mode='w', compression=zipstream.ZIP_DEFLATED, allowZip64=True)
         for filename in os.listdir(recorded_videos_folder()):
             path = os.path.join(recorded_videos_folder(), filename)
             if os.path.isdir(path):
