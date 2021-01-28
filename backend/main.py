@@ -382,7 +382,7 @@ def main(argv):
                         help='Video preview URL which will be put into an <iframe> on frontend. '
                         + 'For manual testing you can use any URL.')
     parser.add_argument('--recorded-videos-folder', required=True)
-    parser.add_argument('--recorded-videos-length-seconds', type=int, default=300)
+    parser.add_argument('--recorded-videos-length-seconds', type=int, default=600)
     parser.add_argument('--bitrate', choices=list(map(lambda b: b.value.name, list(Bitrates))),
                         default=Bitrates.MBIT_2_5.value.name,
                         help='Bitrate of recorded videos in Mbit/s')
