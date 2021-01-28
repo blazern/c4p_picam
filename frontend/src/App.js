@@ -23,6 +23,7 @@ class App extends React.Component {
     this.bitrateSelected = this.bitrateSelected.bind(this);
     this.downloadRecordingsClicked = this.downloadRecordingsClicked.bind(this);
     this.deleteRecordingsClicked = this.deleteRecordingsClicked.bind(this);
+    this.updateCodeButtonClicked = this.updateCodeButtonClicked.bind(this);
     this.cookies = new Cookies();
   }
 
@@ -115,44 +116,47 @@ class App extends React.Component {
     }
 
     return (
-      <div className="App">
-      <header className="App-header">
-      <div className={this.state.loading ? 'LoaderDisplayed' : 'LoaderHidden'}>
-        <Loader
-          type="Puff"
-          color="#00BFFF"/>
-      </div>
+      <div className="CommonStyle">
+        <button onClick={this.updateCodeButtonClicked}>Обновить код</button>
+        <div className="App">
+        <header className="App-header">
+        <div className={this.state.loading ? 'LoaderDisplayed' : 'LoaderHidden'}>
+          <Loader
+            type="Puff"
+            color="#00BFFF"/>
+        </div>
 
-      <div className="MainContent">
-        <div className='Header'>Основное управление камерой.</div>
-        <form>
-          <label>
-            {`Адрес backend'а: `}
-            <input type="text" disabled={this.state.loading} value={this.state.backendUrl} onChange={this.onBackendUrlChange} />
-          </label>
-        </form>
-        <button disabled={!enableRecordingsDownload} onClick={this.downloadRecordingsClicked}>Скачать записи</button>
-        <button disabled={!enableRecordingsDeletion} onClick={this.deleteRecordingsClicked}>Удалить записи</button>
+        <div className="MainContent">
+          <div className='Header'>Основное управление камерой.</div>
+          <form>
+            <label>
+              {`Адрес backend'а: `}
+              <input type="text" disabled={this.state.loading} value={this.state.backendUrl} onChange={this.onBackendUrlChange} />
+            </label>
+          </form>
+          <button disabled={!enableRecordingsDownload} onClick={this.downloadRecordingsClicked}>Скачать записи</button>
+          <button disabled={!enableRecordingsDeletion} onClick={this.deleteRecordingsClicked}>Удалить записи</button>
 
-        <p>
-          <div className='Header'>Управление видео.</div>
-          Состояние видео: {videoState} <br></br>
-          Свободного места: {freeSpaceMegabytes}mb <br></br>
-          Bitrate записи:
-          <select
-            value={defaultBitrate.description}
-            disabled={!enableBitrateChange}
-            onChange={this.bitrateSelected}>
-              {bitrateOptions}
-          </select>
-        </p>
-        <p>
-          <button disabled={!enablePreview} onClick={this.previewButtonClicked}> {previewButtonMessage}</button>
-          <button disabled={!enableRecording} onClick={this.recordVideoButtonClicked}> {recordButtonMessage}</button>
-        </p>
+          <p>
+            <div className='Header'>Управление видео.</div>
+            Состояние видео: {videoState} <br></br>
+            Свободного места: {freeSpaceMegabytes}mb <br></br>
+            Bitrate записи:
+            <select
+              value={defaultBitrate.description}
+              disabled={!enableBitrateChange}
+              onChange={this.bitrateSelected}>
+                {bitrateOptions}
+            </select>
+          </p>
+          <p>
+            <button disabled={!enablePreview} onClick={this.previewButtonClicked}> {previewButtonMessage}</button>
+            <button disabled={!enableRecording} onClick={this.recordVideoButtonClicked}> {recordButtonMessage}</button>
+          </p>
+        </div>
+        <p> {previewIframe} </p>
+      </header>
       </div>
-      <p> {previewIframe} </p>
-    </header>
     </div>
     );
   }
@@ -288,6 +292,18 @@ class App extends React.Component {
       }
     } else {
       alert("Записи не удалены");
+    }
+  }
+
+  async updateCodeButtonClicked() {
+    const response = await axios.get(`${this.state.backendUrl}/update_source_code`);
+    const result = response.data.result;
+    if (result === "updated") {
+      alert("Код обновлён");
+    } else if (result === "up-to-date") {
+      alert("Код не обновлён - всё уже и так хорошо");
+    } else {
+      alert(`Что-то пошло не так! ${result}`);
     }
   }
 }

@@ -1,6 +1,7 @@
 from datetime import datetime
 from enum import Enum
 import argparse
+import git
 import logging
 import os
 import psutil
@@ -301,6 +302,17 @@ def download_all_recordings():
         response = Response(generate_zip(), mimetype='application/zip')
         response.headers['Content-Disposition'] = 'attachment; filename={}'.format('recordings.zip')
         return response
+
+@app.route('/update_source_code')
+def update_source_code():
+    repo = git.Repo('./..')
+    old_head = repo.head.commit
+    pulled = repo.remotes.origin.pull()
+    new_head = repo.head.commit
+    if old_head != new_head:
+        return result_to_json('updated')
+    else:
+        return result_to_json('up-to-date')
 
 ####################################################################
 ################################HTTP################################
