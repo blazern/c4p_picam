@@ -117,7 +117,7 @@ class App extends React.Component {
 
     return (
       <div className="CommonStyle">
-        <button onClick={this.updateCodeButtonClicked}>Обновить код</button>
+        <button disabled={this.state.loading} onClick={this.updateCodeButtonClicked}>Обновить код</button>
         <div className="App">
         <header className="App-header">
         <div className={this.state.loading ? 'LoaderDisplayed' : 'LoaderHidden'}>
@@ -296,6 +296,7 @@ class App extends React.Component {
   }
 
   async updateCodeButtonClicked() {
+    this.setState({ 'loading': this.state.loading + 1 });
     const response = await axios.get(`${this.state.backendUrl}/update_source_code`);
     const result = response.data.result;
     if (result === "updated") {
@@ -305,6 +306,7 @@ class App extends React.Component {
     } else {
       alert(`Что-то пошло не так! ${result}`);
     }
+    this.setState({ 'loading': this.state.loading - 1 });
   }
 }
 
